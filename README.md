@@ -10,13 +10,29 @@ Features
 
 Quick start
 
-1. Create a virtual environment and install dependencies:
+1. Create a virtual environment and install dependencies.
+
+With `uv` installed (recommended):
+
+```bash
+# creates pyproject-based environment and installs deps
+uv .venv --activate --install
+```
+
+Or using a plain virtualenv and pip:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -U pip
-pip install -r requirements.txt
+pip install -r requirements-lite.txt
+```
+
+To install heavy dependencies (easyocr/torch) use the `full` extras:
+
+```bash
+# with pip and PEP-621 pyproject installed into an editable environment
+pip install -e .[full]
 ```
 
 If you have a CUDA-capable GPU and want GPU acceleration for EasyOCR, install torch with CUDA first following instructions at https://pytorch.org, then install EasyOCR.

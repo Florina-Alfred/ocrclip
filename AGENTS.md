@@ -49,6 +49,7 @@ We don't enforce a heavy toolchain in-tree, but the recommended set is:
 - black for formatting
 - isort for import ordering
 - mypy for optional static typing checks
+ - uv (recommended) or a PEP-621-compatible `pyproject.toml` — this repo now includes a `pyproject.toml` and optional extras for `full` and `dev` installs
 
 Install locally:
 
