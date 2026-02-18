@@ -61,11 +61,26 @@ try:
 except Exception:
     pass
 
+# Platform specific hooks
+if sys.platform.startswith("linux"):
+    # Try to include xcb related libs which are common causes of runtime errors
+    try:
+        from scripts.pyi_hook_linux_xcb import hook as _linux_xcb_hook
+
+        # this will run during PyInstaller's hook processing
+        # keep as a no-op here; the hook file is placed where PyInstaller's
+        # hook search will find it when packaging via the default path.
+    except Exception:
+        pass
+
 # Add runtime hook that ensures bundled Qt plugins are found at runtime
 runtime_hooks = []
 rthook = os.path.join(os.path.dirname(__file__), "scripts", "pyi_rth_qt.py")
 if os.path.exists(rthook):
     runtime_hooks.append(rthook)
+rthook2 = os.path.join(os.path.dirname(__file__), "scripts", "pyi_rth_ldpath.py")
+if os.path.exists(rthook2):
+    runtime_hooks.append(rthook2)
 
 block_cipher = None
 
