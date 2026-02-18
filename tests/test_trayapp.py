@@ -1,5 +1,10 @@
 import sys
+import os
 from PySide6 import QtWidgets
+
+# Ensure repository root is on sys.path so tests can import the `src` package
+# when pytest changes the current working directory during collection.
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from src.main import TrayApp
 
