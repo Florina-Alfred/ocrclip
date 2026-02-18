@@ -6,65 +6,78 @@ commonly required for Qt applications (platform plugins, image formats, etc.).
 If you need to customize the build (onefile vs onedir, UPX, additional
 modules), edit this file or pass a different spec to PyInstaller.
 """
+
 import os
 
-try:
-    from PyInstaller.utils.hooks import collect_submodules, collect_data_files, Tree
-except Exception:
-    # When run inside PyInstaller these helpers are available; if not, fall
-    # back to minimal behavior — PyInstaller will still process the spec.
-    def collect_submodules(pkg):
-        return []
+from PyInstaller.utils.hooks import (
+    collect_submodules,
+    collect_data_files,
+    collect_dynamic_libs,
+    Tree,
+)
 
-    def collect_data_files(pkg):
-        return []
-
-    def Tree(path, prefix=None):
-        return []
-
-
+# Collect a broad set of PySide6 internals to avoid missing modules at runtime.
 hiddenimports = []
 datas = []
+binaries = []
 
 try:
     hiddenimports += collect_submodules("PySide6")
     datas += collect_data_files("PySide6")
+    binaries += collect_dynamic_libs("PySide6")
 except Exception:
     pass
 
+# PIL data and plugins
 try:
     datas += collect_data_files("PIL")
 except Exception:
     pass
 
+# mss / screenshot helpers
 try:
     datas += collect_data_files("mss")
 except Exception:
     pass
 
-# Include Qt plugins (platforms, imageformats, styles) when available
+# Torch/easyocr are optional heavyweight deps; include dynamic libs if present
 try:
-    import PySide6.QtCore as QtCore
-
-    qt_plugins_dir = os.path.join(os.path.dirname(QtCore.__file__), "plugins")
-    if os.path.isdir(qt_plugins_dir):
-        datas += Tree(qt_plugins_dir, prefix=os.path.join("PySide6", "plugins"))
+    binaries += collect_dynamic_libs("torch")
 except Exception:
     pass
 
+# Include Qt plugin trees (platforms, imageformats, styles, iconengines, etc.)
+try:
+    import PySide6.QtCore as QtCore
+
+    qtpkg_dir = os.path.dirname(QtCore.__file__)
+    plugins_dir = os.path.join(qtpkg_dir, "plugins")
+    if os.path.isdir(plugins_dir):
+        # include common plugin subdirs if present
+        for sub in ("platforms", "imageformats", "styles", "iconengines", "platforminputcontexts"):
+            subdir = os.path.join(plugins_dir, sub)
+            if os.path.isdir(subdir):
+                datas += Tree(subdir, prefix=os.path.join("PySide6", "plugins", sub))
+except Exception:
+    pass
+
+# Add runtime hook that ensures bundled Qt plugins are found at runtime
+runtime_hooks = []
+rthook = os.path.join(os.path.dirname(__file__), "scripts", "pyi_rth_qt.py")
+if os.path.exists(rthook):
+    runtime_hooks.append(rthook)
 
 block_cipher = None
 
 
-a = Analysis([
-    "src/main.py",
-],
+a = Analysis(
+    ["src/main.py"],
     pathex=[os.path.abspath(".")],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],
-    runtime_hooks=[],
+    runtime_hooks=runtime_hooks,
     excludes=[],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
