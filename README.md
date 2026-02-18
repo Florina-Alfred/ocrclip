@@ -29,10 +29,23 @@ python3 -m src.main
 .venv/bin/python3 -m src.main
 ```
 
+Platform notes
+- macOS: grant Screen Recording and Accessibility permissions for the app (System Settings -> Privacy & Security). Without Screen Recording the app cannot capture the screen.
+- Linux (Wayland): global hotkeys and direct screenshots may be restricted depending on the compositor. Install helpers like `grim`/`slurp` or `xdg-desktop-portal` and use the tray icon if hotkeys fail.
+- Windows: running as a normal user is sufficient for screenshots, but PyInstaller builds should include the Visual C++ runtime.
+
 Command line flags
 - `--no-gpu` : disable GPU use in EasyOCR (default: use GPU if available)
 - `--lang` : comma-separated languages for EasyOCR (default: `en`)
 - `--hotkey` : hotkey string for activation (default: `ctrl+shift+s`)
+ - `--no-hotkey` : disable global hotkey and use tray icon only
+ - `--hotkey-backend` : preferred hotkey backend (`pynput`, `qt`, or `none`)
+ - `--wait-ocr` : block startup until OCR models initialize (useful on first run)
+
+Troubleshooting & packaging notes
+- On macOS you must grant Screen Recording and Accessibility permissions; when running from a bundle (App) grant permissions to the packaged binary.
+- On Wayland you may need `grim` + `slurp` or `xdg-desktop-portal` for screenshots and/or permissions. If global hotkeys do not work, use `--no-hotkey`.
+- For packaging with PyInstaller include Qt plugins and test the single-file build on each target OS. Use `--collect-all PySide6` or PyInstaller hooks for PySide6.
 
 Notes and limitations
 - Wayland: global hotkeys and direct screenshots may be restricted on some Wayland compositors. See README for troubleshooting.
