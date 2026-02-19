@@ -10,3 +10,7 @@ build/
 # *.spec
 .DS_Store
 /.venv
+
+# Packaging artifacts produced by build scripts
+AppDir/
+*.AppImage
