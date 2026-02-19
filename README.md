@@ -74,6 +74,35 @@ Troubleshooting & packaging notes
 - On Wayland you may need `grim` + `slurp` or `xdg-desktop-portal` for screenshots and/or permissions. If global hotkeys do not work, use `--no-hotkey`.
 - For packaging with PyInstaller include Qt plugins and test the single-file build on each target OS. Use `--collect-all PySide6` or PyInstaller hooks for PySide6.
 
+Packaging artifacts removed from main
+-----------------------------------
+This repository used to contain committed build artifacts (AppDir, dist, and a local `.venv`) which made the main branch very large. Those binaries have been removed from `main` to keep the repository lean.
+
+If you need the previous build outputs for debugging they are preserved as a GitHub release asset named "Build artifacts - preserve". We intentionally do not commit these binaries in the repository. Instead, build them locally or in Docker using `Dockerfile.build.full` and the scripts under `scripts/build/linux/`.
+
+Quick instructions to rebuild the full AppImage (recommended: use Docker)
+
+1) Build the reproducible builder image (Ubuntu 22.04):
+
+```bash
+docker build -f Dockerfile.build.full -t ocrclip-builder .
+```
+
+2) Run the builder which will run the AppImage build script and place artifacts under `dist/` on the host (mounted):
+
+```bash
+docker run --rm -v "$(pwd)/dist:/workspace/dist" ocrclip-builder \
+  /bin/bash -lc "./scripts/build/linux/build_appimage_full.sh"
+```
+
+3) Inspect `dist/` for the produced AppImage and run it on a clean VM to verify missing system libs. See `scripts/pyi_post_build_linux_fix_rpath.py` for rpath fixups.
+
+Why we removed binaries
+- Prebuilt artifacts (torch, opencv, Qt libs) are large, frequently platform-specific, and cause repository bloat.
+- Reproducible builds are safer and easier to maintain when done in a controlled environment (Docker builder). This README documents how to reproduce the artifacts.
+
+If you'd like, I can now remove the tracked AppDir files from the index and commit the cleanup so main no longer contains any of the binary files — confirm and I'll proceed.
+
 Notes and limitations
 - Wayland: global hotkeys and direct screenshots may be restricted on some Wayland compositors. See README for troubleshooting.
 - Packaging: use PyInstaller to create standalone EXEs. Expect large binaries due to PyTorch/EasyOCR.
