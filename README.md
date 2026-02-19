@@ -15,24 +15,35 @@ Quick start
 With `uv` installed (recommended):
 
 ```bash
-# creates pyproject-based environment and installs deps
+# create + install deps into a pyproject-managed venv
 uv .venv --activate --install
 ```
 
-Or using a plain virtualenv and pip:
+Fallback — plain virtualenv + pip:
 
 ```bash
 python3 -m venv .venv
 source .venv/bin/activate    # Windows: .venv\Scripts\activate
-pip install -U pip
-pip install -r requirements-lite.txt
+pip install -U pip setuptools wheel
+pip install -e .            # installs "lite" dependencies by default
 ```
 
 To install heavy dependencies (easyocr/torch) use the `full` extras:
 
 ```bash
-# with pip and PEP-621 pyproject installed into an editable environment
+# CPU-only full extras (may be large)
+pip install --index-url https://download.pytorch.org/whl/cpu torch
 pip install -e .[full]
+```
+
+Developer helper (recommended)
+
+Run the included helper which prefers `uv` but falls back to pip:
+
+```bash
+./scripts/dev-setup.sh         # installs lite deps
+# or
+./scripts/dev-setup.sh --full  # installs full extras (torch+easyocr)
 ```
 
 If you have a CUDA-capable GPU and want GPU acceleration for EasyOCR, install torch with CUDA first following instructions at https://pytorch.org, then install EasyOCR.

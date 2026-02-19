@@ -16,13 +16,17 @@ Repository layout (important files)
 
 Quick start / build / run
 -------------------------
-- Create a virtualenv and install deps:
+Create a virtualenv and install deps (preferred: `uv`):
 
 ```bash
+# recommended (uv manages venv creation & installs per pyproject.toml)
+uv .venv --activate --install
+
+# fallback (plain virtualenv + pip)
 python3 -m venv .venv
 source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -U pip
-pip install -r requirements.txt
+pip install -U pip setuptools wheel
+pip install -e .            # installs lite deps
 ```
 
 - Run the app (developer mode):
@@ -226,7 +230,7 @@ Common commands recap
 ---------------------
 ```bash
 # setup
-python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt
+    ./scripts/dev-setup.sh
 
 # run app
 python3 -m src.main
