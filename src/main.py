@@ -371,19 +371,65 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
         try:
             if pil_image is None:
                 raise ValueError("no image")
-            if isinstance(pil_image, (bytes, bytearray)):
-                # load from PNG bytes
+
+            pil_image_obj = None
+
+            # Handle bytes-like payloads first
+            if isinstance(pil_image, (bytes, bytearray, memoryview)):
+                b = bytes(pil_image)
+                logging.debug("_ocr_and_copy: received bytes payload size=%d", len(b))
+                # Try loading from memory
                 try:
-                    pil_image_obj = Image.open(io.BytesIO(pil_image))
+                    pil_image_obj = Image.open(io.BytesIO(b))
+                    pil_image_obj.load()
                 except Exception:
-                    logging.exception("Failed to open PNG bytes")
-                    self.ocr_finished.emit("(snip conversion error)")
-                    return
+                    logging.exception("PIL failed to open image from bytes in-memory; trying temp file")
+                    # Fallback: write to a temp file and try again (some builds/platforms differ)
+                    tmp = None
+                    try:
+                        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
+                        tmp_name = tmp.name
+                        tmp.write(b)
+                        tmp.flush()
+                        tmp.close()
+                        pil_image_obj = Image.open(tmp_name)
+                        pil_image_obj.load()
+                    except Exception:
+                        logging.exception("PIL failed to open image from temp file")
+                        # Try to salvage by locating a PNG signature inside the bytes
+                        try:
+                            idx = b.find(b"\x89PNG")
+                            if idx > 0:
+                                logging.debug("Found PNG signature at offset %d, retrying load", idx)
+                                pil_image_obj = Image.open(io.BytesIO(b[idx:]))
+                                pil_image_obj.load()
+                        except Exception:
+                            logging.exception("Retry after signature slicing failed")
+                        finally:
+                            if tmp is not None:
+                                try:
+                                    import os
+
+                                    os.unlink(tmp_name)
+                                except Exception:
+                                    pass
+
+                    if pil_image_obj is None:
+                        logging.error("Could not decode image from bytes payload")
+                        try:
+                            self.ocr_finished.emit("(snip conversion error)")
+                        except Exception:
+                            pass
+                        return
+
             elif isinstance(pil_image, Image.Image):
                 pil_image_obj = pil_image
             else:
                 logging.error("Unsupported snip type: %s", type(pil_image))
-                self.ocr_finished.emit("(snip conversion error)")
+                try:
+                    self.ocr_finished.emit("(snip conversion error)")
+                except Exception:
+                    pass
                 return
 
             img_rgb = pil_image_obj.convert("RGB")
