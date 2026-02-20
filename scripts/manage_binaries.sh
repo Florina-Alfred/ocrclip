@@ -75,20 +75,31 @@ case "$1" in
     DEST_DIR="$ROOT_DIR/binaries"
     mkdir -p "$DEST_DIR"
 
-    PY_CMD=python3
+    # Use uv-managed venv's pip if uv is available; otherwise require uv installation
+    if ! command -v uv >/dev/null 2>&1; then
+      echo "uv is required to manage environments. Install uv (pipx recommended) and re-run."
+      exit 1
+    fi
+
+    # Create a temporary uv-managed venv to download wheels into the destination
+    TMP_VENV="$DEST_DIR/.tmp_venv"
+    if [ ! -d "$TMP_VENV" ]; then
+      uv "$TMP_VENV" --install
+    fi
+    PIP_CMD="$TMP_VENV/bin/pip"
 
     echo "Downloading lightweight dependencies (requirements-lite.txt) and their dependencies into: $DEST_DIR"
-    "$PY_CMD" -m pip download -d "$DEST_DIR" -r "$ROOT_DIR/requirements-lite.txt"
+    "$PIP_CMD" download -d "$DEST_DIR" -r "$ROOT_DIR/requirements-lite.txt"
 
     echo "Downloading EasyOCR (no dependencies) into: $DEST_DIR"
-    "$PY_CMD" -m pip download --no-deps -d "$DEST_DIR" easyocr
+    "$PIP_CMD" download --no-deps -d "$DEST_DIR" easyocr
 
     echo "Downloading torch (arch=$ARCH) into: $DEST_DIR"
     if [ "$ARCH" = "cpu" ]; then
-      "$PY_CMD" -m pip download --no-deps -d "$DEST_DIR" --index-url https://download.pytorch.org/whl/cpu torch
+      "$PIP_CMD" download --no-deps -d "$DEST_DIR" --index-url https://download.pytorch.org/whl/cpu torch
     else
       # For CUDA variants the PyTorch index uses a path like /whl/cu118
-      "$PY_CMD" -m pip download --no-deps -d "$DEST_DIR" --index-url "https://download.pytorch.org/whl/$ARCH" torch
+      "$PIP_CMD" download --no-deps -d "$DEST_DIR" --index-url "https://download.pytorch.org/whl/$ARCH" torch
     fi
 
     echo
