@@ -75,38 +75,54 @@ case "$1" in
     DEST_DIR="$ROOT_DIR/binaries"
     mkdir -p "$DEST_DIR"
 
-    # Use uv-managed venv's pip if uv is available; otherwise require uv installation
-    if ! command -v uv >/dev/null 2>&1; then
-      echo "uv is required to manage environments. Install uv (pipx recommended) and re-run."
-      exit 1
-    fi
-
-    # Use the project venv if present, otherwise create a single temporary
-    # venv under $ROOT_DIR/.venv_tmp to avoid creating multiple per-run venvs.
-    if [ -d "$ROOT_DIR/.venv" ]; then
-      PIP_CMD="$ROOT_DIR/.venv/bin/pip"
-      CLEAN_TMP_VENV=0
-    else
-      TMP_VENV="$ROOT_DIR/.venv_tmp"
-      if [ ! -d "$TMP_VENV" ]; then
-        uv "$TMP_VENV" --install
+    # Prefer uv when available (it manages venvs consistently). If uv is
+    # unavailable, fall back to using the local python/pip to download wheels.
+    if command -v uv >/dev/null 2>&1; then
+      # Use the project venv if present, otherwise create a single temporary
+      # venv under $ROOT_DIR/.venv_tmp to avoid creating multiple per-run venvs.
+      if [ -d "$ROOT_DIR/.venv" ]; then
+        PIP_CMD="$ROOT_DIR/.venv/bin/pip"
+        CLEAN_TMP_VENV=0
+      else
+        TMP_VENV="$ROOT_DIR/.venv_tmp"
+        if [ ! -d "$TMP_VENV" ]; then
+          uv "$TMP_VENV" --install
+        fi
+        PIP_CMD="$TMP_VENV/bin/pip"
+        CLEAN_TMP_VENV=1
       fi
-      PIP_CMD="$TMP_VENV/bin/pip"
-      CLEAN_TMP_VENV=1
-    fi
 
-    echo "Downloading lightweight dependencies (requirements-lite.txt) and their dependencies into: $DEST_DIR"
-    "$PIP_CMD" download -d "$DEST_DIR" -r "$ROOT_DIR/requirements-lite.txt"
+      echo "Downloading lightweight dependencies (requirements-lite.txt) and their dependencies into: $DEST_DIR"
+      "$PIP_CMD" download -d "$DEST_DIR" -r "$ROOT_DIR/requirements-lite.txt"
 
-    echo "Downloading EasyOCR (no dependencies) into: $DEST_DIR"
-    "$PIP_CMD" download --no-deps -d "$DEST_DIR" easyocr
+      echo "Downloading EasyOCR (no dependencies) into: $DEST_DIR"
+      "$PIP_CMD" download --no-deps -d "$DEST_DIR" easyocr
 
-    echo "Downloading torch (arch=$ARCH) into: $DEST_DIR"
-    if [ "$ARCH" = "cpu" ]; then
-      "$PIP_CMD" download --no-deps -d "$DEST_DIR" --index-url https://download.pytorch.org/whl/cpu torch
+      echo "Downloading torch (arch=$ARCH) into: $DEST_DIR"
+      if [ "$ARCH" = "cpu" ]; then
+        "$PIP_CMD" download --no-deps -d "$DEST_DIR" --index-url https://download.pytorch.org/whl/cpu torch
+      else
+        # For CUDA variants the PyTorch index uses a path like /whl/cu118
+        "$PIP_CMD" download --no-deps -d "$DEST_DIR" --index-url "https://download.pytorch.org/whl/$ARCH" torch
+      fi
     else
-      # For CUDA variants the PyTorch index uses a path like /whl/cu118
-      "$PIP_CMD" download --no-deps -d "$DEST_DIR" --index-url "https://download.pytorch.org/whl/$ARCH" torch
+      PY_CMD=python3
+
+      echo "uv not available; using $PY_CMD -m pip to download into $DEST_DIR"
+
+      echo "Downloading lightweight dependencies (requirements-lite.txt) and their dependencies into: $DEST_DIR"
+      "$PY_CMD" -m pip download -d "$DEST_DIR" -r "$ROOT_DIR/requirements-lite.txt"
+
+      echo "Downloading EasyOCR (no dependencies) into: $DEST_DIR"
+      "$PY_CMD" -m pip download --no-deps -d "$DEST_DIR" easyocr
+
+      echo "Downloading torch (arch=$ARCH) into: $DEST_DIR"
+      if [ "$ARCH" = "cpu" ]; then
+        "$PY_CMD" -m pip download --no-deps -d "$DEST_DIR" --index-url https://download.pytorch.org/whl/cpu torch
+      else
+        "$PY_CMD" -m pip download --no-deps -d "$DEST_DIR" --index-url "https://download.pytorch.org/whl/$ARCH" torch
+      fi
+      CLEAN_TMP_VENV=0
     fi
 
     echo
@@ -122,11 +138,13 @@ case "$1" in
       else
         echo ".venv not found. Run scripts/dev-setup.sh to create a virtualenv first, or run the following to install manually:"
         echo "  uv .venv --install && .venv/bin/pip install --no-index --find-links=\"$DEST_DIR\" $DEST_DIR/*.whl"
+        echo "or, without uv installed locally:"
+        echo "  python3 -m pip install --no-index --find-links=\"$DEST_DIR\" $DEST_DIR/*.whl"
       fi
     else
       echo
       echo "To install the downloaded wheels into an existing venv run (example):"
-      echo "  .venv/bin/pip install --no-index --find-links=\"$DEST_DIR\" $DEST_DIR/*.whl"
+      echo "  .venv/bin/pip install --no-index ---find-links=\"$DEST_DIR\" $DEST_DIR/*.whl"
     fi
 
     # Cleanup temporary venv if we created one

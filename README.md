@@ -19,6 +19,14 @@ Required: `uv` manages the venv and installs dependencies from `pyproject.toml`.
 uv .venv --activate --install
 ```
 
+Fallback — plain virtualenv + pip:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -U pip setuptools wheel
+pip install -e .            # installs "lite" dependencies by default
+```
 To install heavy dependencies (easyocr/torch) use the `full` extras:
 
 ```bash
@@ -147,7 +155,6 @@ If you prefer to control the venv yourself, create it upfront with:
   uv .venv --activate --install
 
 then run the `pull` command with `--install` to install wheels into that venv.
-
 
 Why we removed binaries
 - Prebuilt artifacts (torch, opencv, Qt libs) are large, frequently platform-specific, and cause repository bloat.

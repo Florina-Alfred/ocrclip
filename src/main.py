@@ -504,13 +504,24 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
                         if clipboard.mimeData().hasImage():
                             qimg = clipboard.image()
                             # Make sure the QImage is valid
-                            if qimg.isNull():
-                                return
+                            try:
+                                # Some bindings expose isNull(), others may not
+                                if hasattr(qimg, "isNull") and qimg.isNull():
+                                    return
+                            except Exception:
+                                pass
                             buf = QtCore.QBuffer()
                             buf.open(QtCore.QIODevice.WriteOnly)
-                            ok = qimg.save(buf, "PNG")
-                            if not ok:
-                                return
+                            try:
+                                ok = qimg.save(buf, "PNG")
+                                if not ok:
+                                    return
+                            except Exception:
+                                # Some QImage/QPixmap implementations may raise; fallthrough
+                                try:
+                                    qimg.save(buf, "PNG")
+                                except Exception:
+                                    return
                             data = bytes(buf.data())
                             timer.stop()
                             # Process the image bytes in background thread

@@ -50,36 +50,31 @@ done
 
 PY=python3
 
-# Require `uv` for environment management — we no longer support a pip
-# fallback. Install uv via pipx (recommended) or pip: `python3 -m pipx install uv`
+# Detect uv presence (optional helper)
 UV_CMD=""
 if command -v uv >/dev/null 2>&1; then
   UV_CMD=uv
 fi
 
-if [ -z "$UV_CMD" ]; then
-  cat <<'ERR'
-[dev-setup] uv is required but not found on PATH.
-Install uv (recommended via pipx):
-
-  python3 -m pip install --user pipx && python3 -m pipx ensurepath
-  python3 -m pipx install uv
-
-Or, as an alternative (not recommended):
-  python3 -m pip install --user uv
-
-After installing uv, re-run this script.
-ERR
-  exit 1
-fi
-
-echo "[dev-setup] using uv to create/install into .venv: $UV_CMD .venv --install"
-
-# If preinstall-torch is requested we will create the venv first and then
-# preinstall the torch wheel into the venv before installing the rest.
+# Create venv if missing. If the user requested preinstall of torch we create
+# the venv via python and preinstall the CPU torch wheel into it. Otherwise
+# prefer uv to manage venv creation when available.
 if [ ! -d .venv ]; then
-  # Create the venv using uv (this will also install project deps)
-  "$UV_CMD" .venv --install
+  if [ "$PREINSTALL_TORCH" -eq 1 ]; then
+    echo "[dev-setup] creating venv (.venv) and preinstalling torch"
+    $PY -m venv .venv
+    .venv/bin/pip install -U pip setuptools wheel
+    echo "[dev-setup] preinstalling CPU torch into .venv (this may be large)"
+    .venv/bin/pip install --index-url https://download.pytorch.org/whl/cpu torch || true
+  else
+    if [ -n "$UV_CMD" ]; then
+      echo "[dev-setup] using uv to create/install into .venv: $UV_CMD .venv --install"
+      "$UV_CMD" .venv --install
+    else
+      echo "[dev-setup] creating venv (.venv)"
+      $PY -m venv .venv
+    fi
+  fi
 fi
 
 PIP=.venv/bin/pip
@@ -89,11 +84,11 @@ echo "[dev-setup] upgrading pip / setuptools / wheel inside venv"
 "$PIP" install -U pip setuptools wheel
 
 if [ "$PREINSTALL_TORCH" -eq 1 ]; then
-  echo "[dev-setup] preinstalling CPU torch into .venv (this may be large)"
-  # best-effort; allow failure but continue
+  echo "[dev-setup] ensuring torch is installed (preinstall requested)"
   "$PIP" install --index-url https://download.pytorch.org/whl/cpu torch || true
 fi
 
+# Install project (editable). Use extras if requested.
 if [ "$MODE" = "full" ]; then
   echo "[dev-setup] installing full extras into .venv"
   "$PIP" install -e '.[full]'
