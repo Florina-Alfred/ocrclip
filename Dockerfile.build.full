@@ -6,6 +6,13 @@ RUN apt-get update && apt-get install -y \
   libxcb1 libx11-6 libxkbcommon0 libegl1 libgl1-mesa-glx libxcb-xinerama0 \
   ca-certificates && rm -rf /var/lib/apt/lists/*
 
+# Install uv in the builder image so scripts rely on it (use pipx for isolation)
+RUN python3 -m pip install --upgrade pip
+RUN python3 -m pip install --user pipx || true
+ENV PATH="/root/.local/bin:${PATH}"
+RUN python3 -m pipx ensurepath || true
+RUN python3 -m pipx install uv || python3 -m pip install uv
+
 WORKDIR /workspace
 # Copy repo into image (in CI you may prefer to mount the repo instead)
 COPY . /workspace

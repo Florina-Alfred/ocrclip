@@ -16,17 +16,14 @@ Repository layout (important files)
 
 Quick start / build / run
 -------------------------
-Create a virtualenv and install deps (preferred: `uv`):
+Create a virtualenv and install deps (uv-managed workflow — required):
 
 ```bash
-# recommended (uv manages venv creation & installs per pyproject.toml)
+# Required: uv manages venv creation & installs per pyproject.toml
 uv .venv --activate --install
 
-# fallback (plain virtualenv + pip)
-python3 -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
-pip install -U pip setuptools wheel
-pip install -e .            # installs lite deps
+# After this, run the app using the venv-managed Python
+.venv/bin/python3 -m src.main
 ```
 
 - Run the app (developer mode):
@@ -55,10 +52,10 @@ We don't enforce a heavy toolchain in-tree, but the recommended set is:
 - mypy for optional static typing checks
  - uv (recommended) or a PEP-621-compatible `pyproject.toml` — this repo now includes a `pyproject.toml` and optional extras for `full` and `dev` installs
 
-Install locally:
+Install locally (use .venv/ created by `uv`):
 
 ```bash
-pip install ruff black isort mypy
+.venv/bin/pip install ruff black isort mypy
 ```
 
 Common commands:
@@ -83,7 +80,7 @@ Testing
 There are no tests currently committed, but follow these conventions when you
 add tests. Use `pytest` (widely used, simple fixtures, and good plugin support).
 
-Install: `pip install pytest pytest-qt` (use `pytest-qt` for GUI-related tests).
+Install: `.venv/bin/pip install pytest pytest-qt` (use `pytest-qt` for GUI-related tests).
 
 Run all tests:
 
@@ -114,7 +111,8 @@ python -m unittest tests.test_example.TestClass.test_method
 ```
 
 If tests touch Qt, run them with a display or use headless CI (Xvfb) or
-`pytest-qt`'s helpers to create a QApp fixture.
+`pytest-qt`'s helpers to create a QApp fixture. Use the venv-managed pytest
+binary: `.venv/bin/pytest`.
 
 Signals for agents: When testing code that uses `TrayApp` or `SnipOverlay`,
 prefer to inject a fake `reader` into `TrayApp(app, reader, args)` so OCR is
@@ -124,6 +122,14 @@ Environment variables
 ---------------------
 - `OCRCLIP_LOG` — if set, overrides the log file path used by the app. Default
   is `/tmp/ocrclip.log` in the code. Use this in CI to capture logs.
+
+Agent workflow note
+-------------------
+This repository standardizes on `uv` for environment management. Agents and
+developers should use `uv` in scripts and CI to create and manage `.venv` and
+to install dependencies from `pyproject.toml`. Do not use `pip` directly to
+install project dependencies in the repo; use `.venv/bin/pip` only to install
+or pin additional tools inside the created venv.
 
 Code style guidelines (applies to new edits)
 -------------------------------------------

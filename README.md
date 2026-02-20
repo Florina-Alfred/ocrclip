@@ -12,20 +12,11 @@ Quick start
 
 1. Create a virtual environment and install dependencies.
 
-With `uv` installed (recommended):
+Required: `uv` manages the venv and installs dependencies from `pyproject.toml`.
 
 ```bash
 # create + install deps into a pyproject-managed venv
 uv .venv --activate --install
-```
-
-Fallback — plain virtualenv + pip:
-
-```bash
-python3 -m venv .venv
-source .venv/bin/activate    # Windows: .venv\Scripts\activate
-pip install -U pip setuptools wheel
-pip install -e .            # installs "lite" dependencies by default
 ```
 
 To install heavy dependencies (easyocr/torch) use the `full` extras:
