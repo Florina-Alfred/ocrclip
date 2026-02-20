@@ -15,6 +15,7 @@ from PySide6 import QtCore, QtGui, QtWidgets
 from PIL import Image
 import numpy as np
 import io
+from typing import Optional
 
 # capture backend (tries multiple strategies)
 try:
@@ -77,8 +78,9 @@ class SnipOverlay(QtWidgets.QWidget):
         )
         self.setAttribute(QtCore.Qt.WA_TranslucentBackground)
         self.setWindowState(self.windowState() | QtCore.Qt.WindowFullScreen)
-        self.begin = None
-        self.end = None
+        # Use explicit None checks (QPoint(0,0) is falsy in some bindings)
+        self.begin: Optional[QtCore.QPoint] = None
+        self.end: Optional[QtCore.QPoint] = None
         self.rubberBand = QtWidgets.QRubberBand(QtWidgets.QRubberBand.Rectangle, self)
 
     def mousePressEvent(self, event: QtGui.QMouseEvent):
@@ -91,7 +93,7 @@ class SnipOverlay(QtWidgets.QWidget):
         self.rubberBand.show()
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent):
-        if not self.begin:
+        if self.begin is None:
             return
         try:
             self.end = event.position().toPoint()
@@ -101,7 +103,8 @@ class SnipOverlay(QtWidgets.QWidget):
         self.rubberBand.setGeometry(rect)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent):
-        if not self.begin or not self.end:
+        # Explicit None checks to allow selections that include (0,0)
+        if self.begin is None or self.end is None:
             self.close()
             return
         rect = QtCore.QRect(self.begin, self.end).normalized()
@@ -173,6 +176,19 @@ class SnipOverlay(QtWidgets.QWidget):
         scaled_top = int(top * pixel_ratio)
         scaled_width = int(width * pixel_ratio)
         scaled_height = int(height * pixel_ratio)
+
+        # Avoid zero-area captures which will often fail or return empty images
+        if scaled_width <= 0 or scaled_height <= 0:
+            logging.warning(
+                "zero-area selection after DPI scaling; ignoring capture (%d x %d)",
+                scaled_width,
+                scaled_height,
+            )
+            try:
+                self.snipped.emit(None)
+            except Exception:
+                pass
+            return
 
         if capture is None:
             logging.warning(
@@ -277,9 +293,14 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
                         # QMimeData.hasImage() is the safest cross-format check
                         if clipboard.mimeData().hasImage():
                             qimg = clipboard.image()
+                            # Make sure the QImage is valid
+                            if qimg.isNull():
+                                return
                             buf = QtCore.QBuffer()
                             buf.open(QtCore.QIODevice.WriteOnly)
-                            qimg.save(buf, "PNG")
+                            ok = qimg.save(buf, "PNG")
+                            if not ok:
+                                return
                             data = bytes(buf.data())
                             timer.stop()
                             # Process the image bytes in background thread
@@ -316,12 +337,20 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
             if isinstance(pil_image, (bytes, bytearray)):
                 # load from PNG bytes
                 try:
-                    pil_image = Image.open(io.BytesIO(pil_image)).convert("RGB")
+                    pil_image_obj = Image.open(io.BytesIO(pil_image))
                 except Exception:
                     logging.exception("Failed to open PNG bytes")
                     self.ocr_finished.emit("(snip conversion error)")
                     return
-            img = np.array(pil_image.convert("RGB"))
+            elif isinstance(pil_image, Image.Image):
+                pil_image_obj = pil_image
+            else:
+                logging.error("Unsupported snip type: %s", type(pil_image))
+                self.ocr_finished.emit("(snip conversion error)")
+                return
+
+            img_rgb = pil_image_obj.convert("RGB")
+            img = np.asarray(img_rgb)
         except Exception:
             logging.exception("Failed to convert snip to array")
             try:
@@ -575,6 +604,8 @@ def main():
 
                 listener = keyboard.Listener(on_press=on_press, on_release=on_release)
                 listener.start()
+                # Keep a reference on the tray so the listener isn't GC'd
+                tray._pynput_listener = listener
             except Exception:
                 logging.exception(
                     "pynput hotkey failed; falling back to tray activation"
@@ -618,6 +649,8 @@ def main():
                             hk.register()
                     except Exception:
                         logging.exception("Failed to register Qt hotkey via QHotkey")
+                    # Keep reference so the QHotkey object isn't GC'd
+                    tray._qhotkey = hk
                 else:
                     logging.info(
                         "QHotkey import succeeded but could not instantiate hotkey; falling back to tray icon"
