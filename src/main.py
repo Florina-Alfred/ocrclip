@@ -215,20 +215,73 @@ class SnipOverlay(QtWidgets.QWidget):
         # raw PNG bytes; validate them and emit PNG bytes so the worker thread
         # handles the PIL conversion in a consistent way.
         try:
-            # Accept memoryview-like objects as bytes too
-            if isinstance(png, memoryview):
-                png_bytes = bytes(png)
-            else:
-                png_bytes = png
+            # Try to coerce common payload types to raw PNG bytes. Some
+            # capture backends or Qt buffers may return QByteArray-like objects
+            # that don't directly appear as `bytes` in Python; attempt several
+            # fallbacks to obtain bytes.
+            png_bytes = None
 
-            # If capture returned a PIL Image already, convert it to PNG bytes
-            if isinstance(png_bytes, Image.Image):
-                buf = io.BytesIO()
-                png_bytes.save(buf, format="PNG")
-                png_bytes = buf.getvalue()
+            # direct bytes/bytearray
+            if isinstance(png, (bytes, bytearray)):
+                png_bytes = bytes(png)
+            # memoryview
+            elif isinstance(png, memoryview):
+                png_bytes = png.tobytes()
+            else:
+                # PIL image instance
+                try:
+                    if isinstance(png, Image.Image):
+                        buf = io.BytesIO()
+                        png.save(buf, format="PNG")
+                        png_bytes = buf.getvalue()
+                except Exception:
+                    png_bytes = None
+
+            # Generic attempts for buffer-like objects (QByteArray, etc.)
+            if png_bytes is None:
+                try:
+                    # Some Qt/PySide6 types expose a .data() method
+                    if hasattr(png, "data") and callable(getattr(png, "data")):
+                        try:
+                            maybe = png.data()
+                            if isinstance(maybe, (bytes, bytearray, memoryview)):
+                                png_bytes = bytes(maybe)
+                            else:
+                                # attempt bytes() conversion
+                                png_bytes = bytes(maybe)
+                        except Exception:
+                            png_bytes = None
+                except Exception:
+                    png_bytes = None
+
+            if png_bytes is None:
+                # Final attempt: try calling tobytes/tobytes-like
+                try:
+                    if hasattr(png, "tobytes"):
+                        png_bytes = png.tobytes()
+                except Exception:
+                    png_bytes = None
+
+            if png_bytes is None:
+                # As a last-ditch attempt attempt bytes(png)
+                try:
+                    png_bytes = bytes(png)
+                except Exception:
+                    png_bytes = None
 
             if not isinstance(png_bytes, (bytes, bytearray)):
-                logging.exception("Unknown capture payload type: %s", type(png_bytes))
+                logging.exception("Could not coerce capture payload of type %s to bytes", type(png))
+                try:
+                    # write payload repr for debugging
+                    dbg_path = os.path.join(tempfile.gettempdir(), "ocrclip-capture-failed.bin")
+                    with open(dbg_path, "wb") as fh:
+                        try:
+                            fh.write(repr(png).encode("utf-8"))
+                        except Exception:
+                            fh.write(b"<unreprable payload>")
+                    logging.error("Wrote debug payload to %s", dbg_path)
+                except Exception:
+                    pass
                 try:
                     self.snipped.emit(None)
                 except Exception:
@@ -242,6 +295,14 @@ class SnipOverlay(QtWidgets.QWidget):
                 tmp_img.load()
             except Exception:
                 logging.exception("Captured bytes are not a valid image")
+                try:
+                    # Dump bytes to a temp file to aid debugging
+                    dbg_path = os.path.join(tempfile.gettempdir(), "ocrclip-capture-invalid.png")
+                    with open(dbg_path, "wb") as fh:
+                        fh.write(png_bytes if isinstance(png_bytes, (bytes, bytearray)) else b"")
+                    logging.error("Wrote invalid capture bytes to %s", dbg_path)
+                except Exception:
+                    pass
                 try:
                     self.snipped.emit(None)
                 except Exception:
