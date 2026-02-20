@@ -211,11 +211,37 @@ class SnipOverlay(QtWidgets.QWidget):
             except Exception:
                 pass
             return
-
+        # Ensure the returned payload is a valid image. Some backends return
+        # raw PNG bytes; try to parse them into a PIL.Image here so the
+        # background worker receives a ready-to-use Image object.
         try:
-            self.snipped.emit(png)
-        except Exception:
-            logging.exception("snipped.emit failed")
+            # Accept memoryview-like objects as bytes too
+            if isinstance(png, memoryview):
+                png_bytes = bytes(png)
+            else:
+                png_bytes = png
+            pil_img = None
+            if isinstance(png_bytes, (bytes, bytearray)):
+                try:
+                    pil_img = Image.open(io.BytesIO(png_bytes))
+                    # force load to catch truncated/invalid images early
+                    pil_img.load()
+                except Exception:
+                    logging.exception("Captured bytes are not a valid image")
+                    try:
+                        self.snipped.emit(None)
+                    except Exception:
+                        pass
+                    return
+            else:
+                # Unknown payload type; attempt to emit it and let the worker
+                # handle conversion/fallbacks.
+                pil_img = png
+
+            try:
+                self.snipped.emit(pil_img)
+            except Exception:
+                logging.exception("snipped.emit failed")
 
 
 class TrayApp(QtWidgets.QSystemTrayIcon):
