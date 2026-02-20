@@ -97,6 +97,51 @@ docker run --rm -v "$(pwd)/dist:/workspace/dist" ocrclip-builder \
 
 3) Inspect `dist/` for the produced AppImage and run it on a clean VM to verify missing system libs. See `scripts/pyi_post_build_linux_fix_rpath.py` for rpath fixups.
 
+Manage binaries helper
+----------------------
+We include a small helper script `scripts/manage_binaries.sh` to simplify working with heavy binary artifacts.
+
+- Build the full AppImage via Docker (recommended):
+
+```bash
+./scripts/manage_binaries.sh build
+```
+
+- Get recommended commands to install official prebuilt wheels (PyTorch CPU wheel first, then EasyOCR):
+
+```bash
+./scripts/manage_binaries.sh pull
+```
+
+The `pull` mode prints the canonical commands we recommend (for example:
+`pip install --index-url https://download.pytorch.org/whl/cpu torch` then
+`pip install easyocr`). We intentionally avoid committing prebuilt binaries to
+the repository — use the Docker builder or the `manage_binaries.sh` helper to
+produce or fetch them on-demand.
+
+`pull` usage (automated download)
+--------------------------------
+The `pull` subcommand now automates downloading wheel files (and light deps)
+into a local `./binaries/` directory (this directory is ignored by git).
+
+Usage examples:
+
+  - Download CPU wheels and required lite deps into `./binaries`:
+
+      ./scripts/manage_binaries.sh pull
+
+  - Download a CUDA build (example for CUDA 11.8) and install into `.venv`:
+
+      ./scripts/manage_binaries.sh pull cu118 --install
+
+Notes:
+- Downloaded wheels are saved to `./binaries/` (see `.gitignore`) so they are
+  never committed to the repository.
+- Use `--install` to install the downloaded wheels into an existing `.venv`.
+- The script downloads `requirements-lite.txt` packages, `easyocr` (no-deps),
+  and a `torch` wheel for the requested architecture.
+
+
 Why we removed binaries
 - Prebuilt artifacts (torch, opencv, Qt libs) are large, frequently platform-specific, and cause repository bloat.
 - Reproducible builds are safer and easier to maintain when done in a controlled environment (Docker builder). This README documents how to reproduce the artifacts.
