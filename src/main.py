@@ -251,6 +251,58 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
 
     def handle_snip(self, pil_image: Image.Image):
         # Run OCR in a thread. The snipped payload may be PNG bytes or None.
+        # On Windows, when the overlay capture fails (None) fall back to the
+        # native snipping UI and poll the clipboard for the resulting image.
+        if pil_image is None and sys.platform == "win32":
+            try:
+                # Launch the Windows snip UI. Prefer the ms-screenclip URI which
+                # works on recent Windows 10/11 builds; fall back to SnippingTool.
+                try:
+                    subprocess.Popen(["explorer.exe", "ms-screenclip:"])
+                except Exception:
+                    sniptool = shutil.which("SnippingTool.exe") or shutil.which(
+                        "snippingtool.exe"
+                    )
+                    if sniptool:
+                        subprocess.Popen([sniptool])
+
+                # Poll the Qt clipboard on a QTimer (runs in the GUI thread).
+                clipboard = self.app.clipboard()
+                timer = QtCore.QTimer(self)
+                timer.setInterval(300)
+                start = time.time()
+
+                def _check_clipboard():
+                    try:
+                        # QMimeData.hasImage() is the safest cross-format check
+                        if clipboard.mimeData().hasImage():
+                            qimg = clipboard.image()
+                            buf = QtCore.QBuffer()
+                            buf.open(QtCore.QIODevice.WriteOnly)
+                            qimg.save(buf, "PNG")
+                            data = bytes(buf.data())
+                            timer.stop()
+                            # Process the image bytes in background thread
+                            threading.Thread(
+                                target=self._ocr_and_copy, args=(data,), daemon=True
+                            ).start()
+                            return
+                        # timeout after a reasonable period
+                        if time.time() - start > 15:
+                            timer.stop()
+                            threading.Thread(
+                                target=self._ocr_and_copy, args=(None,), daemon=True
+                            ).start()
+                    except Exception:
+                        logging.exception("clipboard polling failed")
+                        timer.stop()
+
+                timer.timeout.connect(_check_clipboard)
+                timer.start()
+                return
+            except Exception:
+                logging.exception("Windows clipboard fallback failed")
+
         threading.Thread(
             target=self._ocr_and_copy, args=(pil_image,), daemon=True
         ).start()
