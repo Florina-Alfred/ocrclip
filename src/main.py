@@ -10,10 +10,35 @@ import atexit
 import shutil
 import subprocess
 import time
+import importlib
 
-from PySide6 import QtCore, QtGui, QtWidgets
-from PIL import Image
-import numpy as np
+try:
+    from PySide6 import QtCore, QtGui, QtWidgets
+except Exception as e:
+    sys.stderr.write(
+        "Missing dependency PySide6 (Qt).\n"
+        "Please install runtime deps into the project venv and re-run.\n"
+        "Recommended (uv-managed):\n  uv .venv --activate --install\n"
+        "Then run: uv run -- python -m src.main\n"
+    )
+    raise
+
+try:
+    from PIL import Image
+except Exception:
+    sys.stderr.write(
+        "Missing dependency Pillow. Install via uv-managed venv: uv .venv --activate --install\n"
+    )
+    raise
+
+try:
+    import numpy as np
+except Exception:
+    sys.stderr.write(
+        "Missing dependency numpy. Install via uv-managed venv: uv .venv --activate --install\n"
+    )
+    raise
+
 import io
 from typing import Optional
 
@@ -27,6 +52,41 @@ except Exception:
         import src.capture as capture  # type: ignore
     except Exception:
         capture = None
+
+
+def _ensure_capture_module():
+    """Attempt to (re)import the capture module if it's not present.
+
+    This helps in situations where an early import failed (transient env or
+    dependency issues) but the module becomes available later.
+    """
+    global capture
+    if capture is not None:
+        # Try to reload an existing module so that optional-backend flags
+        # (like `_HAS_MSS`) are recomputed if dependencies were installed
+        # after the initial import.
+        try:
+            importlib.reload(capture)  # type: ignore
+        except Exception:
+            logging.debug(
+                "capture.reload failed; keeping existing module", exc_info=True
+            )
+        return capture
+    try:
+        from . import capture as _cap
+
+        capture = _cap
+        return capture
+    except Exception:
+        try:
+            import src.capture as _cap
+
+            capture = _cap
+            return capture
+        except Exception:
+            capture = None
+            return None
+
 
 # Logging and crash handlers (robust across OSes)
 LOG_PATH = os.environ.get(
@@ -137,7 +197,9 @@ class SnipOverlay(QtWidgets.QWidget):
             geo.width(),
             geo.height(),
         )
-        # Hide overlay before capturing so we don't capture our overlay
+        # Hide overlay before capturing so we don't capture our overlay.
+        # Use a short delayed capture (singleShot) to allow the compositor
+        # to update and avoid self-capture on flaky systems.
         try:
             self.hide()
         except Exception:
@@ -148,10 +210,7 @@ class SnipOverlay(QtWidgets.QWidget):
         width = rect.width()
         height = rect.height()
 
-        # Attempt to account for HiDPI / devicePixelRatio differences. Many
-        # capture backends expect device (physical) pixels while Qt geometry
-        # may be in logical pixels. Query the screen at the capture center and
-        # scale coordinates when a ratio > 1.0 is reported.
+        # Attempt to account for HiDPI / devicePixelRatio differences.
         try:
             center_point = QtCore.QPoint(left + width // 2, top + height // 2)
             screen_obj = QtGui.QGuiApplication.screenAt(center_point)
@@ -190,45 +249,80 @@ class SnipOverlay(QtWidgets.QWidget):
                 pass
             return
 
-        if capture is None:
-            logging.warning(
-                "No capture backend available (capture.py failed to import)"
-            )
-            try:
-                self.snipped.emit(None)
-            except Exception:
-                pass
-            return
+        # Allow the event loop and compositor a moment to hide the overlay.
+        try:
+            QtWidgets.QApplication.processEvents()
+        except Exception:
+            pass
 
-        try:
-            png = capture.capture_region(
-                scaled_left, scaled_top, scaled_width, scaled_height
-            )
-        except Exception as e:
-            logging.exception("Screen capture failed: %s", e)
+        def _perform_capture(
+            s_left=scaled_left, s_top=scaled_top, s_w=scaled_width, s_h=scaled_height
+        ):
+            # Consolidated capture flow: try capture module, then Qt fallback.
+            png = None
+            # Ensure capture module is fresh and available
+            _ensure_capture_module()
+            if capture is not None:
+                try:
+                    png = capture.capture_region(s_left, s_top, s_w, s_h)
+                except Exception:
+                    logging.exception("capture.capture_region failed")
+                    png = None
+            else:
+                logging.debug("capture module not available; Qt fallback only")
+
+            # Qt fallback: use QScreen.grabWindow into a QBuffer
+            if png is None:
+                try:
+                    screen = QtGui.QGuiApplication.primaryScreen()
+                    if screen is None:
+                        raise RuntimeError("no_qt_screen")
+                    pix = screen.grabWindow(0, s_left, s_top, s_w, s_h)
+                    buf = QtCore.QBuffer()
+                    buf.open(QtCore.QBuffer.ReadWrite)
+                    ok = pix.save(buf, "PNG")
+                    if ok:
+                        png = bytes(buf.data())
+                    else:
+                        logging.debug("QPixmap.save returned False in Qt fallback")
+                except Exception:
+                    logging.exception("Qt fallback capture failed")
+                    png = None
+
+            if png is None:
+                logging.warning("Screen capture failed via all backends")
+                try:
+                    self.snipped.emit(None)
+                except Exception:
+                    pass
+                return
+
+            # Write a raw debug dump of the payload to help diagnose issues.
             try:
-                self.snipped.emit(None)
+                ts = int(time.time() * 1000)
+                raw_dbg = os.path.join(tempfile.gettempdir(), f"ocrclip-raw-{ts}.bin")
+                try:
+                    with open(raw_dbg, "wb") as fh:
+                        if isinstance(png, (bytes, bytearray)):
+                            fh.write(bytes(png))
+                        else:
+                            try:
+                                fh.write(repr(png).encode("utf-8"))
+                            except Exception:
+                                fh.write(b"<unreprable-payload>")
+                    logging.info("Wrote raw capture payload to %s", raw_dbg)
+                except Exception:
+                    logging.debug("Failed to write raw debug payload", exc_info=True)
             except Exception:
                 pass
-            return
-        # Ensure the returned payload is a valid image. Some backends return
-        # raw PNG bytes; validate them and emit PNG bytes so the worker thread
-        # handles the PIL conversion in a consistent way.
-        try:
-            # Try to coerce common payload types to raw PNG bytes. Some
-            # capture backends or Qt buffers may return QByteArray-like objects
-            # that don't directly appear as `bytes` in Python; attempt several
-            # fallbacks to obtain bytes.
+
+            # Coerce commonly-returned types into PNG bytes
             png_bytes = None
-
-            # direct bytes/bytearray
             if isinstance(png, (bytes, bytearray)):
                 png_bytes = bytes(png)
-            # memoryview
             elif isinstance(png, memoryview):
                 png_bytes = png.tobytes()
             else:
-                # PIL image instance
                 try:
                     if isinstance(png, Image.Image):
                         buf = io.BytesIO()
@@ -237,43 +331,49 @@ class SnipOverlay(QtWidgets.QWidget):
                 except Exception:
                     png_bytes = None
 
-            # Generic attempts for buffer-like objects (QByteArray, etc.)
             if png_bytes is None:
                 try:
-                    # Some Qt/PySide6 types expose a .data() method
-                    if hasattr(png, "data") and callable(getattr(png, "data")):
-                        try:
-                            maybe = png.data()
-                            if isinstance(maybe, (bytes, bytearray, memoryview)):
+                    if hasattr(QtGui, "QImage") and isinstance(png, QtGui.QImage):
+                        buf = QtCore.QBuffer()
+                        buf.open(QtCore.QIODevice.WriteOnly)
+                        ok = png.save(buf, "PNG")
+                        if ok:
+                            png_bytes = bytes(buf.data())
+                    elif hasattr(QtGui, "QPixmap") and isinstance(png, QtGui.QPixmap):
+                        buf = QtCore.QBuffer()
+                        buf.open(QtCore.QIODevice.WriteOnly)
+                        ok = png.save(buf, "PNG")
+                        if ok:
+                            png_bytes = bytes(buf.data())
+                    else:
+                        if hasattr(png, "data") and callable(getattr(png, "data")):
+                            try:
+                                maybe = png.data()
                                 png_bytes = bytes(maybe)
-                            else:
-                                # attempt bytes() conversion
-                                png_bytes = bytes(maybe)
-                        except Exception:
-                            png_bytes = None
-                except Exception:
-                    png_bytes = None
-
-            if png_bytes is None:
-                # Final attempt: try calling tobytes/tobytes-like
-                try:
-                    if hasattr(png, "tobytes"):
-                        png_bytes = png.tobytes()
-                except Exception:
-                    png_bytes = None
-
-            if png_bytes is None:
-                # As a last-ditch attempt attempt bytes(png)
-                try:
-                    png_bytes = bytes(png)
+                            except Exception:
+                                png_bytes = None
+                        elif hasattr(png, "tobytes"):
+                            try:
+                                png_bytes = png.tobytes()
+                            except Exception:
+                                png_bytes = None
+                        else:
+                            try:
+                                png_bytes = bytes(png)
+                            except Exception:
+                                png_bytes = None
                 except Exception:
                     png_bytes = None
 
             if not isinstance(png_bytes, (bytes, bytearray)):
-                logging.exception("Could not coerce capture payload of type %s to bytes", type(png))
+                logging.exception(
+                    "Could not coerce capture payload of type %s to bytes", type(png)
+                )
                 try:
-                    # write payload repr for debugging
-                    dbg_path = os.path.join(tempfile.gettempdir(), "ocrclip-capture-failed.bin")
+                    ts = int(time.time() * 1000)
+                    dbg_path = os.path.join(
+                        tempfile.gettempdir(), f"ocrclip-capture-failed-{ts}.bin"
+                    )
                     with open(dbg_path, "wb") as fh:
                         try:
                             fh.write(repr(png).encode("utf-8"))
@@ -288,18 +388,23 @@ class SnipOverlay(QtWidgets.QWidget):
                     pass
                 return
 
-            # Validate PNG bytes by attempting to open and load them now; this
-            # avoids passing truncated data to the OCR worker.
+            # Validate PNG bytes by attempting to open and load them now
             try:
                 tmp_img = Image.open(io.BytesIO(png_bytes))
                 tmp_img.load()
             except Exception:
                 logging.exception("Captured bytes are not a valid image")
                 try:
-                    # Dump bytes to a temp file to aid debugging
-                    dbg_path = os.path.join(tempfile.gettempdir(), "ocrclip-capture-invalid.png")
+                    ts = int(time.time() * 1000)
+                    dbg_path = os.path.join(
+                        tempfile.gettempdir(), f"ocrclip-capture-invalid-{ts}.png"
+                    )
                     with open(dbg_path, "wb") as fh:
-                        fh.write(png_bytes if isinstance(png_bytes, (bytes, bytearray)) else b"")
+                        fh.write(
+                            png_bytes
+                            if isinstance(png_bytes, (bytes, bytearray))
+                            else b""
+                        )
                     logging.error("Wrote invalid capture bytes to %s", dbg_path)
                 except Exception:
                     pass
@@ -310,10 +415,17 @@ class SnipOverlay(QtWidgets.QWidget):
                 return
 
             try:
-                # Emit raw PNG bytes (worker will re-open them into PIL.Image)
-                self.snipped.emit(bytes(png_bytes))
+                self.snipped.emit((bytes(png_bytes), s_w, s_h))
             except Exception:
                 logging.exception("snipped.emit failed")
+
+        # Use a small delay so the overlay has time to hide and compositor
+        # to repaint; 80ms is a reasonable compromise across platforms.
+        try:
+            QtCore.QTimer.singleShot(80, _perform_capture)
+        except Exception:
+            # As a last resort, perform capture synchronously
+            _perform_capture()
 
 
 class TrayApp(QtWidgets.QSystemTrayIcon):
@@ -435,54 +547,173 @@ class TrayApp(QtWidgets.QSystemTrayIcon):
 
             pil_image_obj = None
 
-            # Handle bytes-like payloads first
-            if isinstance(pil_image, (bytes, bytearray, memoryview)):
+            # The overlay emits a tuple (png_bytes, scaled_width, scaled_height)
+            # to preserve DPI-aware sizes. Handle that first.
+            if isinstance(pil_image, tuple) and len(pil_image) == 3:
+                payload, scaled_w, scaled_h = pil_image
+                if isinstance(payload, (bytes, bytearray, memoryview)):
+                    b = bytes(payload)
+                    logging.debug(
+                        "_ocr_and_copy: received tuple bytes payload size=%d (scaled %dx%d)",
+                        len(b),
+                        scaled_w,
+                        scaled_h,
+                    )
+                    # Try loading from memory first
+                    try:
+                        pil_image_obj = Image.open(io.BytesIO(b))
+                        pil_image_obj.load()
+                    except Exception:
+                        logging.exception(
+                            "PIL failed to open image from bytes in-memory; trying temp file"
+                        )
+                        tmp = None
+                        try:
+                            tmp = tempfile.NamedTemporaryFile(
+                                suffix=".png", delete=False
+                            )
+                            tmp_name = tmp.name
+                            tmp.write(b)
+                            tmp.flush()
+                            tmp.close()
+                            pil_image_obj = Image.open(tmp_name)
+                            pil_image_obj.load()
+                        except Exception:
+                            logging.exception("PIL failed to open image from temp file")
+                            # Try to salvage by finding an embedded PNG signature
+                            try:
+                                idx = b.find(b"\x89PNG")
+                                if idx > 0:
+                                    logging.debug(
+                                        "Found PNG signature at offset %d, retrying load",
+                                        idx,
+                                    )
+                                    try:
+                                        pil_image_obj = Image.open(io.BytesIO(b[idx:]))
+                                        pil_image_obj.load()
+                                    except Exception:
+                                        logging.exception(
+                                            "Retry after signature slicing failed"
+                                        )
+                            except Exception:
+                                logging.exception("Signature-scan failed")
+                            finally:
+                                if tmp is not None:
+                                    try:
+                                        os.unlink(tmp_name)
+                                    except Exception:
+                                        pass
+
+                        # If we still don't have an image, see if the payload is
+                        # raw pixel data (RGB or RGBA) using the scaled dims.
+                        if pil_image_obj is None:
+                            try:
+                                expected_rgb = scaled_w * scaled_h * 3
+                                expected_rgba = scaled_w * scaled_h * 4
+                                lb = len(b)
+                                logging.debug(
+                                    "Failed PIL open. payload len=%d expected_rgb=%d expected_rgba=%d",
+                                    lb,
+                                    expected_rgb,
+                                    expected_rgba,
+                                )
+                                if lb == expected_rgb:
+                                    logging.info(
+                                        "Interpreting payload as raw RGB bytes"
+                                    )
+                                    try:
+                                        pil_image_obj = Image.frombytes(
+                                            "RGB", (scaled_w, scaled_h), b
+                                        )
+                                    except Exception:
+                                        try:
+                                            pil_image_obj = Image.frombuffer(
+                                                "RGB",
+                                                (scaled_w, scaled_h),
+                                                b,
+                                                "raw",
+                                                "RGB",
+                                                0,
+                                                1,
+                                            )
+                                        except Exception:
+                                            logging.exception(
+                                                "Raw RGB reconstruction failed"
+                                            )
+                                elif lb == expected_rgba:
+                                    logging.info(
+                                        "Interpreting payload as raw RGBA bytes"
+                                    )
+                                    try:
+                                        pil_image_obj = Image.frombytes(
+                                            "RGBA", (scaled_w, scaled_h), b
+                                        ).convert("RGB")
+                                    except Exception:
+                                        try:
+                                            pil_image_obj = Image.frombuffer(
+                                                "RGBA",
+                                                (scaled_w, scaled_h),
+                                                b,
+                                                "raw",
+                                                "RGBA",
+                                                0,
+                                                1,
+                                            ).convert("RGB")
+                                        except Exception:
+                                            logging.exception(
+                                                "Raw RGBA reconstruction failed"
+                                            )
+                            except Exception:
+                                logging.exception("Raw-pixel salvage logic failed")
+
+                        if pil_image_obj is None:
+                            logging.error("Could not decode image from tuple payload")
+                            try:
+                                # Write debug dump for worker-side failures
+                                ts = int(time.time() * 1000)
+                                dbg_worker = os.path.join(
+                                    tempfile.gettempdir(),
+                                    f"ocrclip-worker-failed-{ts}.bin",
+                                )
+                                with open(dbg_worker, "wb") as fh:
+                                    fh.write(b)
+                                logging.error(
+                                    "Wrote worker debug payload to %s", dbg_worker
+                                )
+                            except Exception:
+                                logging.exception(
+                                    "Failed to write worker debug payload"
+                                )
+                            try:
+                                self.ocr_finished.emit("(snip conversion error)")
+                            except Exception:
+                                pass
+                            return
+                elif isinstance(payload, Image.Image):
+                    pil_image_obj = payload
+                else:
+                    logging.error("Unsupported tuple payload type: %s", type(payload))
+                    try:
+                        self.ocr_finished.emit("(snip conversion error)")
+                    except Exception:
+                        pass
+                    return
+
+            elif isinstance(pil_image, (bytes, bytearray, memoryview)):
                 b = bytes(pil_image)
                 logging.debug("_ocr_and_copy: received bytes payload size=%d", len(b))
-                # Try loading from memory
                 try:
                     pil_image_obj = Image.open(io.BytesIO(b))
                     pil_image_obj.load()
                 except Exception:
-                    logging.exception("PIL failed to open image from bytes in-memory; trying temp file")
-                    # Fallback: write to a temp file and try again (some builds/platforms differ)
-                    tmp = None
+                    logging.exception(
+                        "PIL failed to open image from bytes payload (direct)"
+                    )
                     try:
-                        tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False)
-                        tmp_name = tmp.name
-                        tmp.write(b)
-                        tmp.flush()
-                        tmp.close()
-                        pil_image_obj = Image.open(tmp_name)
-                        pil_image_obj.load()
+                        self.ocr_finished.emit("(snip conversion error)")
                     except Exception:
-                        logging.exception("PIL failed to open image from temp file")
-                        # Try to salvage by locating a PNG signature inside the bytes
-                        try:
-                            idx = b.find(b"\x89PNG")
-                            if idx > 0:
-                                logging.debug("Found PNG signature at offset %d, retrying load", idx)
-                                pil_image_obj = Image.open(io.BytesIO(b[idx:]))
-                                pil_image_obj.load()
-                        except Exception:
-                            logging.exception("Retry after signature slicing failed")
-                        finally:
-                            if tmp is not None:
-                                try:
-                                    import os
-
-                                    os.unlink(tmp_name)
-                                except Exception:
-                                    pass
-
-                    if pil_image_obj is None:
-                        logging.error("Could not decode image from bytes payload")
-                        try:
-                            self.ocr_finished.emit("(snip conversion error)")
-                        except Exception:
-                            pass
-                        return
-
+                        pass
+                    return
             elif isinstance(pil_image, Image.Image):
                 pil_image_obj = pil_image
             else:
