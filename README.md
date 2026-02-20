@@ -132,6 +132,22 @@ Notes:
 - The script downloads `requirements-lite.txt` packages, `easyocr` (no-deps),
   and a `torch` wheel for the requested architecture.
 
+Note about venvs and `uv` (required)
+-----------------------------------
+`scripts/manage_binaries.sh pull` requires `uv` to manage venvs. Behavior:
+
+- If a project venv exists at `.venv`, `manage_binaries.sh` will use its `pip`
+  to install or to populate wheels.
+- If `.venv` does not exist, the script will create a single temporary venv at
+  `.venv_tmp` for the operation and remove it when finished. This avoids
+  creating multiple ephemeral venvs under `./binaries/`.
+
+If you prefer to control the venv yourself, create it upfront with:
+
+  uv .venv --activate --install
+
+then run the `pull` command with `--install` to install wheels into that venv.
+
 
 Why we removed binaries
 - Prebuilt artifacts (torch, opencv, Qt libs) are large, frequently platform-specific, and cause repository bloat.

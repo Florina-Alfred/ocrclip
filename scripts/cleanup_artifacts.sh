@@ -90,6 +90,9 @@ for p in "${to_remove[@]}"; do
   fi
 
   echo "sudo move failed. Attempting sudo rm -rf (destructive)..."
+  # Use caution: do not accidentally remove the user's .venv unless it's in the
+  # to_remove list (we only operate on untracked targets above). This is a
+  # destructive fallback when preserving/moving fails.
   sudo rm -rf "$p"
   echo "Removed $p"
 done

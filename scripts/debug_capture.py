@@ -15,6 +15,11 @@ import os
 
 from PIL import Image
 
+# Ensure the repository root is on sys.path when running this script directly
+REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if REPO_ROOT not in sys.path:
+    sys.path.insert(0, REPO_ROOT)
+
 try:
     from src import capture
 except Exception as e:
@@ -65,8 +70,28 @@ def main():
         left, top, width, height = auto_center_region()
 
     print(f"Capturing region: left={left} top={top} width={width} height={height}")
+
+    # Prefer mss when available (no Qt event loop needed). Otherwise attempt
+    # to ensure a QGuiApplication exists before calling the Qt-based capture
+    # backend inside capture.capture_region(). This helps in dev environments
+    # where PySide6 is installed but no app has been created yet.
     try:
-        data = capture.capture_region(left, top, width, height)
+        if getattr(capture, "_HAS_MSS", False):
+            print("Using mss backend")
+            data = capture._mss_capture(left, top, width, height)
+        else:
+            try:
+                # Try to create a minimal Qt application so capture._qt_capture
+                # has a QGuiApplication context.
+                from PySide6 import QtWidgets
+
+                app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
+                print("Created Qt application for capture")
+            except Exception:
+                print(
+                    "PySide6 not available or failed to create app; falling back to capture.capture_region() which will try available CLIs"
+                )
+            data = capture.capture_region(left, top, width, height)
     except Exception as e:
         print("capture_region raised:", e, file=sys.stderr)
         raise
