@@ -212,34 +212,45 @@ class SnipOverlay(QtWidgets.QWidget):
                 pass
             return
         # Ensure the returned payload is a valid image. Some backends return
-        # raw PNG bytes; try to parse them into a PIL.Image here so the
-        # background worker receives a ready-to-use Image object.
+        # raw PNG bytes; validate them and emit PNG bytes so the worker thread
+        # handles the PIL conversion in a consistent way.
         try:
             # Accept memoryview-like objects as bytes too
             if isinstance(png, memoryview):
                 png_bytes = bytes(png)
             else:
                 png_bytes = png
-            pil_img = None
-            if isinstance(png_bytes, (bytes, bytearray)):
+
+            # If capture returned a PIL Image already, convert it to PNG bytes
+            if isinstance(png_bytes, Image.Image):
+                buf = io.BytesIO()
+                png_bytes.save(buf, format="PNG")
+                png_bytes = buf.getvalue()
+
+            if not isinstance(png_bytes, (bytes, bytearray)):
+                logging.exception("Unknown capture payload type: %s", type(png_bytes))
                 try:
-                    pil_img = Image.open(io.BytesIO(png_bytes))
-                    # force load to catch truncated/invalid images early
-                    pil_img.load()
+                    self.snipped.emit(None)
                 except Exception:
-                    logging.exception("Captured bytes are not a valid image")
-                    try:
-                        self.snipped.emit(None)
-                    except Exception:
-                        pass
-                    return
-            else:
-                # Unknown payload type; attempt to emit it and let the worker
-                # handle conversion/fallbacks.
-                pil_img = png
+                    pass
+                return
+
+            # Validate PNG bytes by attempting to open and load them now; this
+            # avoids passing truncated data to the OCR worker.
+            try:
+                tmp_img = Image.open(io.BytesIO(png_bytes))
+                tmp_img.load()
+            except Exception:
+                logging.exception("Captured bytes are not a valid image")
+                try:
+                    self.snipped.emit(None)
+                except Exception:
+                    pass
+                return
 
             try:
-                self.snipped.emit(pil_img)
+                # Emit raw PNG bytes (worker will re-open them into PIL.Image)
+                self.snipped.emit(bytes(png_bytes))
             except Exception:
                 logging.exception("snipped.emit failed")
 
