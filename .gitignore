@@ -14,3 +14,4 @@ build/
 # Packaging artifacts produced by build scripts
 AppDir/
 *.AppImage
+binaries/
