@@ -16,3 +16,4 @@ AppDir/
 *.AppImage
 binaries/
 artifacts/
+!scripts/build/**

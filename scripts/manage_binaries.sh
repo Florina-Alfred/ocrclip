@@ -81,12 +81,19 @@ case "$1" in
       exit 1
     fi
 
-    # Create a temporary uv-managed venv to download wheels into the destination
-    TMP_VENV="$DEST_DIR/.tmp_venv"
-    if [ ! -d "$TMP_VENV" ]; then
-      uv "$TMP_VENV" --install
+    # Use the project venv if present, otherwise create a single temporary
+    # venv under $ROOT_DIR/.venv_tmp to avoid creating multiple per-run venvs.
+    if [ -d "$ROOT_DIR/.venv" ]; then
+      PIP_CMD="$ROOT_DIR/.venv/bin/pip"
+      CLEAN_TMP_VENV=0
+    else
+      TMP_VENV="$ROOT_DIR/.venv_tmp"
+      if [ ! -d "$TMP_VENV" ]; then
+        uv "$TMP_VENV" --install
+      fi
+      PIP_CMD="$TMP_VENV/bin/pip"
+      CLEAN_TMP_VENV=1
     fi
-    PIP_CMD="$TMP_VENV/bin/pip"
 
     echo "Downloading lightweight dependencies (requirements-lite.txt) and their dependencies into: $DEST_DIR"
     "$PIP_CMD" download -d "$DEST_DIR" -r "$ROOT_DIR/requirements-lite.txt"
@@ -114,12 +121,18 @@ case "$1" in
         echo "Installed wheels into .venv"
       else
         echo ".venv not found. Run scripts/dev-setup.sh to create a virtualenv first, or run the following to install manually:"
-        echo "  python3 -m pip install --no-index --find-links=\"$DEST_DIR\" $DEST_DIR/*.whl"
+        echo "  uv .venv --install && .venv/bin/pip install --no-index --find-links=\"$DEST_DIR\" $DEST_DIR/*.whl"
       fi
     else
       echo
       echo "To install the downloaded wheels into an existing venv run (example):"
       echo "  .venv/bin/pip install --no-index --find-links=\"$DEST_DIR\" $DEST_DIR/*.whl"
+    fi
+
+    # Cleanup temporary venv if we created one
+    if [ "${CLEAN_TMP_VENV:-0}" -eq 1 ]; then
+      echo "Cleaning up temporary venv at $ROOT_DIR/.venv_tmp"
+      rm -rf "$ROOT_DIR/.venv_tmp"
     fi
 
     ;;
